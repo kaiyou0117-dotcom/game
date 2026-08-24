@@ -151,6 +151,51 @@
     line-height: 1.6;
   }
 
+  /* ---- Game over overlay ---- */
+  .gameover-title {
+    font-family: 'Shippori Mincho', serif;
+    font-weight: 700;
+    font-size: clamp(24px, 6vw, 36px);
+    color: var(--blood);
+    letter-spacing: 0.1em;
+    animation: gameoverPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes gameoverPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .gameover-title { animation: none; }
+  }
+  .gameover-sub {
+    font-family: 'DotGothic16', sans-serif;
+    font-size: 13px;
+    color: var(--parchment);
+    opacity: 0.7;
+    letter-spacing: 0.04em;
+    margin-top: -14px;
+  }
+  .retry-btn {
+    background: var(--ink-black-2);
+    border: 3px solid var(--blood);
+    color: var(--parchment);
+    font-family: 'DotGothic16', sans-serif;
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    padding: 14px 32px;
+  }
+  .retry-btn:hover,
+  .retry-btn:focus-visible {
+    background: var(--blood);
+    color: var(--ink-black);
+    outline: none;
+  }
+  .retry-btn:focus-visible {
+    outline: 2px solid var(--arcane);
+    outline-offset: 3px;
+  }
+
   /* small in-battle difficulty badge */
   .difficulty-badge {
     position: fixed;
@@ -421,6 +466,12 @@
       <div class="diff-desc">弾幕もスペックも本気<br>覚悟して臨むこと</div>
     </button>
   </div>
+</div>
+
+<div class="opening" id="gameOverScreen" data-hidden="true">
+  <div class="gameover-title">You lose</div>
+  <div class="gameover-sub">情報の悪魔に敗れた</div>
+  <button class="retry-btn" id="retryBtn">もう一度挑戦する</button>
 </div>
 
 <div class="difficulty-badge" id="difficultyBadge"></div>
@@ -712,6 +763,7 @@
   const commandMenu = document.getElementById('commandMenu');
   const tbMessage = document.getElementById('tbMessage');
   let isResolving = false;
+  let gameOver = false;
 
   function setMessage(text) {
     tbMessage.textContent = text;
@@ -726,7 +778,7 @@
   }
 
   async function startFightTurn() {
-    if (isResolving) return;
+    if (isResolving || gameOver) return;
     isResolving = true;
     lockMenu(true);
 
@@ -739,6 +791,11 @@
 
     setMode('battle');
     await runShikigamiPattern(3200);
+
+    if (playerHP <= 0) {
+      showGameOver();
+      return;
+    }
 
     setMode('text');
     setMessage('（ここにセリフが入ります。あとで追加予定）');
@@ -796,6 +853,33 @@
     if (hpFill) hpFill.style.width = '100%';
     resetPlayerHP();
   }
+
+  // ---- Game over / retry ----
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const retryBtn = document.getElementById('retryBtn');
+
+  function showGameOver() {
+    gameOver = true;
+    patternActive = false;
+    lockMenu(true);
+    gameOverScreen.setAttribute('data-hidden', 'false');
+  }
+
+  function resetToOpening() {
+    gameOverScreen.setAttribute('data-hidden', 'true');
+    battleStage.setAttribute('data-locked', 'true');
+    openingScreen.setAttribute('data-hidden', 'false');
+
+    bullets = [];
+    patternActive = false;
+    gameOver = false;
+    isResolving = false;
+    lockMenu(false);
+    setMode('text');
+    setMessage('（ここにセリフが入ります。あとで追加予定）');
+  }
+
+  retryBtn.addEventListener('click', resetToOpening);
 
   document.querySelectorAll('.diff-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
