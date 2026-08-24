@@ -594,7 +594,7 @@
     <div class="textbox-wrap">
       <div class="textbox" id="textbox">
         <div class="tb-speaker" id="tbSpeaker"></div>
-        <div class="tb-message" id="tbMessage">（ここにセリフが入ります。あとで追加予定）</div>
+        <div class="tb-message" id="tbMessage">悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。</div>
       </div>
     </div>
 
@@ -1182,6 +1182,7 @@
       b.blur(); // avoid native SPACE-activates-focused-button side effects later
       if (b.dataset.cmd === 'fight') startFightTurn();
       else if (b.dataset.cmd === 'act') startActTurn();
+      else if (b.dataset.cmd === 'item') startItemTurn();
     });
   });
 
@@ -1276,6 +1277,7 @@
 
   const TARGETS = ['サマノ・スペクトゥス'];
   const ACT_ACTIONS = ['しらべる', 'なでる'];
+  const ITEMS = ['回復のくすり', '怪力のくすり', '防御のくすり', 'エリクサー'];
 
   function selectTarget() {
     return selectOption('だれを　ねらう？', [...TARGETS, 'もどる']);
@@ -1283,6 +1285,10 @@
 
   function selectAction() {
     return selectOption('なにを　する？', [...ACT_ACTIONS, 'もどる']);
+  }
+
+  function selectItem() {
+    return selectOption('なにを　つかう？', [...ITEMS, 'もどる']);
   }
 
   async function startFightTurn() {
@@ -1293,7 +1299,7 @@
     const target = await selectTarget();
     if (target === 'もどる') {
       setMode('text');
-      setMessage('（ここにセリフが入ります。あとで追加予定）');
+      setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
       lockMenu(false);
       isResolving = false;
       return;
@@ -1304,10 +1310,11 @@
     await wait(600);
 
     const dmg = await runAttackGauge();
-    damageBoss(dmg);
+    const finalDmg = atkBuffTurns > 0 ? Math.round(dmg * ATK_BUFF_MULT) : dmg;
+    damageBoss(finalDmg);
 
     setMode('text');
-    setMessage(dmg + ' のダメージ！');
+    setMessage(finalDmg + ' のダメージ！');
     await wait(900);
 
     if (bossHP <= 0) {
@@ -1326,8 +1333,9 @@
       return;
     }
 
+    tickBuffs();
     setMode('text');
-    setMessage('（ここにセリフが入ります。あとで追加予定）');
+    setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
     lockMenu(false);
     isResolving = false;
   }
@@ -1340,7 +1348,7 @@
     const action = await selectAction();
     if (action === 'もどる') {
       setMode('text');
-      setMessage('（ここにセリフが入ります。あとで追加予定）');
+      setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
       lockMenu(false);
       isResolving = false;
       return;
@@ -1372,8 +1380,59 @@
       return;
     }
 
+    tickBuffs();
     setMode('text');
-    setMessage('（ここにセリフが入ります。あとで追加予定）');
+    setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
+    lockMenu(false);
+    isResolving = false;
+  }
+
+  async function startItemTurn() {
+    if (isResolving || battleOver) return;
+    isResolving = true;
+    lockMenu(true);
+
+    const item = await selectItem();
+    if (item === 'もどる') {
+      setMode('text');
+      setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
+      lockMenu(false);
+      isResolving = false;
+      return;
+    }
+
+    setMode('text');
+    if (item === '回復のくすり') {
+      playerHP = Math.min(PLAYER_HP_MAX, playerHP + 8);
+      updatePlayerHPUI();
+      setMessage('回復のくすりを飲んだ。\n体力が少し回復した！');
+    } else if (item === '怪力のくすり') {
+      atkBuffTurns = 3;
+      setMessage('怪力のくすりを飲んだ。\n体の奥から力が湧いてくる！');
+    } else if (item === '防御のくすり') {
+      defBuffTurns = 3;
+      setMessage('防御のくすりを飲んだ。\n体が軽く、痛みに強くなった気がする！');
+    } else if (item === 'エリクサー') {
+      playerHP = PLAYER_HP_MAX;
+      updatePlayerHPUI();
+      setMessage('エリクサーを飲んだ。\n体力が全回復した！');
+    }
+    await wait(1400);
+
+    setMessage('情報の悪魔の攻撃……！');
+    await wait(900);
+
+    setMode('battle');
+    await runShikigamiPattern(ENEMY_ATTACK_DURATION_MS);
+
+    if (playerHP <= 0) {
+      showGameOver();
+      return;
+    }
+
+    tickBuffs();
+    setMode('text');
+    setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
     lockMenu(false);
     isResolving = false;
   }
@@ -1398,6 +1457,17 @@
   const playerHpFill = document.getElementById('playerHpFill');
   const playerHpNumbers = document.getElementById('playerHpNumbers');
 
+  // ---- Item buffs (from ITEM menu potions) ----
+  const ATK_BUFF_MULT = 1.5; // 怪力のくすり: outgoing damage multiplier
+  const DEF_BUFF_MULT = 0.6; // 防御のくすり: incoming damage multiplier (40% reduction)
+  let atkBuffTurns = 0;
+  let defBuffTurns = 0;
+
+  function tickBuffs() {
+    if (atkBuffTurns > 0) atkBuffTurns--;
+    if (defBuffTurns > 0) defBuffTurns--;
+  }
+
   function updatePlayerHPUI() {
     const ratio = Math.max(0, playerHP / PLAYER_HP_MAX);
     if (playerHpFill) {
@@ -1410,12 +1480,16 @@
   function damagePlayer() {
     if (!currentDifficulty) return;
     const cfg = DIFFICULTY[currentDifficulty];
-    playerHP = Math.max(0, playerHP - cfg.playerDamage);
+    let dmg = cfg.playerDamage;
+    if (defBuffTurns > 0) dmg = Math.max(1, Math.round(dmg * DEF_BUFF_MULT));
+    playerHP = Math.max(0, playerHP - dmg);
     updatePlayerHPUI();
   }
 
   function resetPlayerHP() {
     playerHP = PLAYER_HP_MAX;
+    atkBuffTurns = 0;
+    defBuffTurns = 0;
     updatePlayerHPUI();
   }
 
@@ -1551,7 +1625,7 @@
     isResolving = false;
     lockMenu(false);
     setMode('text');
-    setMessage('（ここにセリフが入ります。あとで追加予定）');
+    setMessage('悪魔はこちらの様子を見ては手帳に何かを書き込んでいる。');
   }
 
   retryBtn.addEventListener('click', resetToOpening);
