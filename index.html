@@ -406,9 +406,6 @@
 
   .bullet-canvas {
     position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
   }
 
   .soul {
@@ -687,19 +684,35 @@
   };
   dragonSprite.src = 'images/dragon.png';
 
+  // sword bullet sprite (uploaded katana artwork, recolored to a white silhouette with transparency).
+  // The blade runs diagonally within the image (tip near top-right, handle near bottom-left);
+  // SWORD_TIP_ANGLE is that diagonal's angle, used to align the tip with the travel direction.
+  const swordSprite = new Image();
+  let swordSpriteLoaded = false;
+  const SWORD_IMG_ASPECT = 704 / 728; // fallback height/width ratio until it finishes loading
+  const SWORD_BLADE_LENGTH_PX = 998.6; // tip-to-handle length measured in the source image
+  const SWORD_TIP_ANGLE = 44.1 * (Math.PI / 180); // corrects the image's intrinsic diagonal tilt
+  swordSprite.onload = () => { swordSpriteLoaded = true; };
+  swordSprite.src = 'images/sword.png';
+
   const SOUL_SIZE = 16;
   const SPEED = 180; // px/sec
   let pos = { x: 0, y: 0 };
   let boxSize = { w: 0, h: 0 };
   const keys = {};
+  const BULLET_CANVAS_MARGIN = 60; // px of extra space around the box where bullets (e.g. swords) stay visible
 
   function initSoulPosition() {
     boxSize.w = battleBox.clientWidth;
     boxSize.h = battleBox.clientHeight;
     pos.x = boxSize.w / 2;
     pos.y = boxSize.h / 2;
-    bulletCanvas.width = boxSize.w;
-    bulletCanvas.height = boxSize.h;
+    bulletCanvas.width = boxSize.w + BULLET_CANVAS_MARGIN * 2;
+    bulletCanvas.height = boxSize.h + BULLET_CANVAS_MARGIN * 2;
+    bulletCanvas.style.left = (-BULLET_CANVAS_MARGIN) + 'px';
+    bulletCanvas.style.top = (-BULLET_CANVAS_MARGIN) + 'px';
+    bulletCanvas.style.width = bulletCanvas.width + 'px';
+    bulletCanvas.style.height = bulletCanvas.height + 'px';
     render();
   }
 
@@ -713,7 +726,8 @@
   // ---- 式神弾幕（Shikigami bullet pattern） ----
   let bullets = [];
   let patternActive = false;
-  let currentPatternType = 'fox'; // alternates each enemy turn: 'fox' or 'dragon'
+  const PATTERN_TYPES = ['fox', 'dragon', 'sword'];
+  let currentPatternType = 'fox'; // cycles each enemy turn through PATTERN_TYPES
   let spawnAccumulator = 0;
   let currentSpawnInterval = 400; // ms, adjusted by difficulty
   let invincible = false;
@@ -726,15 +740,15 @@
   function spawnShikigamiBullet() {
     const density = bulletDensity();
     const r = 9 + Math.random() * 4;
-    const y = r + Math.random() * (bulletCanvas.height - r * 2);
+    const y = r + Math.random() * (boxSize.h - r * 2);
     const speed = (70 + Math.random() * 40) * Math.min(density, 2.8);
-    bullets.push({ type: 'fox', x: bulletCanvas.width + r, y, vx: -speed, vy: 0, r });
+    bullets.push({ type: 'fox', x: boxSize.w + r, y, vx: -speed, vy: 0, r });
   }
 
   function spawnDragonBullet() {
     const density = bulletDensity();
-    const w = bulletCanvas.width;
-    const h = bulletCanvas.height;
+    const w = boxSize.w;
+    const h = boxSize.h;
     const s = 16 + Math.random() * 8; // half-length scale of the dragon silhouette
     const r = s * 0.6; // hitbox, smaller than the visual body for fairness
     const speed = (75 + Math.random() * 35) * Math.min(density, 2.5);
@@ -758,8 +772,32 @@
     bullets.push({ type: 'dragon', x, y, vx, vy, r, visualR: s, angle });
   }
 
+  function spawnSwordBullet() {
+    const density = bulletDensity();
+    const w = boxSize.w;
+    const h = boxSize.h;
+    const s = 20 + Math.random() * 8; // half-length scale of the blade
+    const r = s * 0.4; // hitbox, thinner than the visual blade
+    const speed = (110 + Math.random() * 55) * Math.min(density, 2.5);
+    const margin = s * 2.6;
+    const side = Math.floor(Math.random() * 4); // 0 top, 1 bottom, 2 left, 3 right
+    let x, y;
+    if (side === 0) { x = Math.random() * w; y = -margin; }
+    else if (side === 1) { x = Math.random() * w; y = h + margin; }
+    else if (side === 2) { x = -margin; y = Math.random() * h; }
+    else { x = w + margin; y = Math.random() * h; }
+    // fires in a straight line at the player's position at the moment it's launched
+    const dx = pos.x - x, dy = pos.y - y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const vx = (dx / dist) * speed;
+    const vy = (dy / dist) * speed;
+    const angle = Math.atan2(vy, vx);
+    bullets.push({ type: 'sword', x, y, vx, vy, r, visualR: s, angle });
+  }
+
   function spawnPatternBullet() {
     if (currentPatternType === 'dragon') spawnDragonBullet();
+    else if (currentPatternType === 'sword') spawnSwordBullet();
     else spawnShikigamiBullet();
   }
 
@@ -770,7 +808,7 @@
     }
     bullets = bullets.filter((b) => {
       const m = (b.visualR || b.r) * 2 + 30;
-      return b.x > -m && b.x < bulletCanvas.width + m && b.y > -m && b.y < bulletCanvas.height + m;
+      return b.x > -m && b.x < boxSize.w + m && b.y > -m && b.y < boxSize.h + m;
     });
   }
 
@@ -882,12 +920,111 @@
     bulletCtx.restore();
   }
 
+  function drawSwordBulletVector(b) {
+    const s = b.visualR;
+    bulletCtx.save();
+    bulletCtx.translate(b.x, b.y);
+    bulletCtx.rotate(b.angle);
+    bulletCtx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+    bulletCtx.strokeStyle = 'rgba(15, 12, 10, 0.9)';
+    bulletCtx.lineWidth = 1.4;
+    bulletCtx.shadowColor = 'rgba(200, 220, 255, 0.75)';
+    bulletCtx.shadowBlur = 7;
+
+    // blade (tapers to a point at the tip, leading in the direction of travel)
+    bulletCtx.beginPath();
+    bulletCtx.moveTo(s * 1.3, 0);
+    bulletCtx.lineTo(s * 0.9, -s * 0.16);
+    bulletCtx.lineTo(-s * 0.55, -s * 0.11);
+    bulletCtx.lineTo(-s * 0.55, s * 0.11);
+    bulletCtx.lineTo(s * 0.9, s * 0.16);
+    bulletCtx.closePath();
+    bulletCtx.fill();
+    bulletCtx.stroke();
+
+    // center ridge line on the blade
+    bulletCtx.beginPath();
+    bulletCtx.strokeStyle = 'rgba(15, 12, 10, 0.4)';
+    bulletCtx.lineWidth = 1;
+    bulletCtx.moveTo(s * 0.85, 0);
+    bulletCtx.lineTo(-s * 0.5, 0);
+    bulletCtx.stroke();
+
+    // crossguard
+    bulletCtx.strokeStyle = 'rgba(15, 12, 10, 0.9)';
+    bulletCtx.lineWidth = 1.4;
+    bulletCtx.beginPath();
+    bulletCtx.moveTo(-s * 0.55, -s * 0.32);
+    bulletCtx.lineTo(-s * 0.72, -s * 0.32);
+    bulletCtx.lineTo(-s * 0.72, s * 0.32);
+    bulletCtx.lineTo(-s * 0.55, s * 0.32);
+    bulletCtx.closePath();
+    bulletCtx.fill();
+    bulletCtx.stroke();
+
+    // handle
+    bulletCtx.beginPath();
+    bulletCtx.moveTo(-s * 0.72, -s * 0.09);
+    bulletCtx.lineTo(-s * 1.15, -s * 0.09);
+    bulletCtx.lineTo(-s * 1.15, s * 0.09);
+    bulletCtx.lineTo(-s * 0.72, s * 0.09);
+    bulletCtx.closePath();
+    bulletCtx.fill();
+    bulletCtx.stroke();
+
+    // pommel
+    bulletCtx.beginPath();
+    bulletCtx.arc(-s * 1.15, 0, s * 0.1, 0, Math.PI * 2);
+    bulletCtx.fill();
+    bulletCtx.stroke();
+
+    bulletCtx.shadowBlur = 0;
+    bulletCtx.restore();
+  }
+
+  function drawSwordBullet(b) {
+    if (!swordSpriteLoaded) {
+      drawSwordBulletVector(b);
+      return;
+    }
+    const s = b.visualR;
+    const targetLength = s * 2.8; // desired on-screen tip-to-handle length
+    const scale = targetLength / SWORD_BLADE_LENGTH_PX;
+    const drawW = swordSprite.naturalWidth * scale;
+    const drawH = swordSprite.naturalHeight * scale;
+    bulletCtx.save();
+    bulletCtx.translate(b.x, b.y);
+    bulletCtx.rotate(b.angle);
+    bulletCtx.rotate(SWORD_TIP_ANGLE); // align the source art's diagonal blade with the travel direction
+    bulletCtx.shadowColor = 'rgba(200, 220, 255, 0.75)';
+    bulletCtx.shadowBlur = 7;
+    bulletCtx.drawImage(swordSprite, -drawW / 2, -drawH / 2, drawW, drawH);
+    bulletCtx.shadowBlur = 0;
+    bulletCtx.restore();
+  }
+
   function drawBullets() {
     bulletCtx.clearRect(0, 0, bulletCanvas.width, bulletCanvas.height);
+    bulletCtx.save();
+    bulletCtx.translate(BULLET_CANVAS_MARGIN, BULLET_CANVAS_MARGIN);
+
+    // sword bullets stay visible even outside the box (drawn before the clip below)
+    for (const b of bullets) {
+      if (b.type === 'sword') drawSwordBullet(b);
+    }
+
+    // other bullet types stay confined to the visible box, as before
+    bulletCtx.save();
+    bulletCtx.beginPath();
+    bulletCtx.rect(0, 0, boxSize.w, boxSize.h);
+    bulletCtx.clip();
     for (const b of bullets) {
       if (b.type === 'dragon') drawDragonBullet(b);
-      else drawFoxBullet(b);
+      else if (b.type !== 'sword') drawFoxBullet(b);
     }
+    bulletCtx.restore();
+
+    bulletCtx.restore();
   }
 
   function checkCollisions() {
@@ -915,7 +1052,7 @@
 
   function runShikigamiPattern(durationMs) {
     return new Promise((resolve) => {
-      currentPatternType = currentPatternType === 'fox' ? 'dragon' : 'fox';
+      currentPatternType = PATTERN_TYPES[(PATTERN_TYPES.indexOf(currentPatternType) + 1) % PATTERN_TYPES.length];
       bullets = [];
       spawnAccumulator = 0;
       currentSpawnInterval = Math.max(90, 380 / bulletDensity());
@@ -1002,6 +1139,7 @@
     b.addEventListener('click', () => {
       selectedIndex = i;
       updateSelection();
+      b.blur(); // avoid native SPACE-activates-focused-button side effects later
       if (b.dataset.cmd === 'fight') startFightTurn();
       else if (b.dataset.cmd === 'act') startActTurn();
     });
@@ -1384,26 +1522,27 @@
       applyDifficulty(btn.dataset.diff);
       openingScreen.setAttribute('data-hidden', 'true');
       battleStage.setAttribute('data-locked', 'false');
+      btn.blur(); // don't leave a hidden button focused — it would still catch SPACE natively
     });
   });
 
   // SPACE also confirms the selected command-menu button, and dismisses
   // the game-over / victory overlays — the same "decision" key everywhere.
+  // preventDefault runs unconditionally so SPACE never falls through to the
+  // browser's native "activate the focused button" behavior mid-battle.
   window.addEventListener('keydown', (e) => {
     if (e.key !== ' ' && e.code !== 'Space') return;
+    e.preventDefault();
     if (gameOverScreen.getAttribute('data-hidden') === 'false') {
-      e.preventDefault();
       resetToOpening();
       return;
     }
     if (victoryScreen.getAttribute('data-hidden') === 'false') {
-      e.preventDefault();
       resetToOpening();
       return;
     }
     if (battleStage.getAttribute('data-locked') === 'true') return;
     if (commandMenu.getAttribute('data-locked') === 'true') return;
-    e.preventDefault();
     buttons[selectedIndex].click();
   });
 </script>
