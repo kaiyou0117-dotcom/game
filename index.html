@@ -329,17 +329,25 @@
     line-height: 1.7;
     letter-spacing: 0.02em;
   }
-  .tb-name {
+  .tb-speaker {
+    position: absolute;
+    top: 10px;
+    right: 16px;
     font-weight: 700;
     color: var(--gold);
-    font-size: 14px;
+    font-size: 13px;
     letter-spacing: 0.08em;
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--parchment-edge);
+    display: none;
   }
   .tb-message {
     white-space: pre-line;
+  }
+  .tb-option {
+    cursor: pointer;
+  }
+  .tb-option:hover,
+  .tb-option.selected {
+    color: var(--gold);
   }
   .textbox .placeholder {
     opacity: 0.55;
@@ -588,7 +596,7 @@
 
     <div class="textbox-wrap">
       <div class="textbox" id="textbox">
-        <div class="tb-name">サマノ・スペクトゥス</div>
+        <div class="tb-speaker" id="tbSpeaker"></div>
         <div class="tb-message" id="tbMessage">（ここにセリフが入ります。あとで追加予定）</div>
       </div>
     </div>
@@ -979,10 +987,13 @@
     });
   }
   window.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (battleStage.getAttribute('data-locked') === 'true') return;
+    if (commandMenu.getAttribute('data-locked') === 'true') return;
     if (e.key === 'ArrowLeft') {
       selectedIndex = (selectedIndex - 1 + buttons.length) % buttons.length;
       updateSelection();
-    } else if (e.key === 'ArrowRight') {
+    } else {
       selectedIndex = (selectedIndex + 1) % buttons.length;
       updateSelection();
     }
@@ -992,17 +1003,26 @@
       selectedIndex = i;
       updateSelection();
       if (b.dataset.cmd === 'fight') startFightTurn();
+      else if (b.dataset.cmd === 'act') startActTurn();
     });
   });
 
   // ---- Turn sequence: player attacks -> enemy attacks back ----
   const commandMenu = document.getElementById('commandMenu');
   const tbMessage = document.getElementById('tbMessage');
+  const tbSpeaker = document.getElementById('tbSpeaker');
   let isResolving = false;
   let battleOver = false;
 
-  function setMessage(text) {
+  function setMessage(text, speaker) {
     tbMessage.textContent = text;
+    if (speaker) {
+      tbSpeaker.textContent = speaker;
+      tbSpeaker.style.display = '';
+    } else {
+      tbSpeaker.textContent = '';
+      tbSpeaker.style.display = 'none';
+    }
   }
 
   function lockMenu(locked) {
@@ -1013,25 +1033,78 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // SPACE is the universal decision/confirm button throughout the battle.
-  function waitForDecision() {
+  function selectOption(promptText, options) {
+    setMode('text');
+    let selIdx = 0;
+
+    tbSpeaker.style.display = 'none';
+    tbSpeaker.textContent = '';
+    tbMessage.innerHTML = '';
+
+    const promptEl = document.createElement('div');
+    promptEl.textContent = promptText;
+    tbMessage.appendChild(promptEl);
+
+    const optionEls = options.map((opt) => {
+      const el = document.createElement('div');
+      el.className = 'tb-option';
+      tbMessage.appendChild(el);
+      return el;
+    });
+
+    function render() {
+      optionEls.forEach((el, i) => {
+        el.textContent = (i === selIdx ? '▶ ' : '　　') + options[i];
+        el.classList.toggle('selected', i === selIdx);
+      });
+    }
+    render();
+
     return new Promise((resolve) => {
-      function onSpace(e) {
-        if (e.key !== ' ' && e.code !== 'Space') return;
-        e.preventDefault();
-        window.removeEventListener('keydown', onSpace);
-        resolve();
+      function cleanup() {
+        window.removeEventListener('keydown', onKey);
+        optionEls.forEach((el, i) => el.removeEventListener('click', clickHandlers[i]));
       }
-      window.addEventListener('keydown', onSpace);
+      function finish(idx) {
+        cleanup();
+        resolve(options[idx]);
+      }
+      function onKey(e) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          selIdx = (selIdx - 1 + options.length) % options.length;
+          render();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          selIdx = (selIdx + 1) % options.length;
+          render();
+        } else if (e.key === ' ' || e.code === 'Space') {
+          e.preventDefault();
+          finish(selIdx);
+        }
+      }
+      const clickHandlers = optionEls.map((el, i) => {
+        const handler = () => {
+          selIdx = i;
+          render();
+          finish(i);
+        };
+        el.addEventListener('click', handler);
+        return handler;
+      });
+      window.addEventListener('keydown', onKey);
     });
   }
 
   const TARGETS = ['サマノ・スペクトゥス'];
+  const ACT_ACTIONS = ['しらべる', 'なでる'];
 
-  async function selectTarget() {
-    setMode('text');
-    setMessage('だれを　ねらう？\n▶ ' + TARGETS[0]);
-    await waitForDecision();
+  function selectTarget() {
+    return selectOption('だれを　ねらう？', [...TARGETS, 'もどる']);
+  }
+
+  function selectAction() {
+    return selectOption('なにを　する？', [...ACT_ACTIONS, 'もどる']);
   }
 
   async function startFightTurn() {
@@ -1039,7 +1112,14 @@
     isResolving = true;
     lockMenu(true);
 
-    await selectTarget();
+    const target = await selectTarget();
+    if (target === 'もどる') {
+      setMode('text');
+      setMessage('（ここにセリフが入ります。あとで追加予定）');
+      lockMenu(false);
+      isResolving = false;
+      return;
+    }
 
     setMode('text');
     setMessage('あなたの攻撃！');
@@ -1055,6 +1135,52 @@
     if (bossHP <= 0) {
       showVictory();
       return;
+    }
+
+    setMessage('情報の悪魔の攻撃……！');
+    await wait(900);
+
+    setMode('battle');
+    await runShikigamiPattern(3200);
+
+    if (playerHP <= 0) {
+      showGameOver();
+      return;
+    }
+
+    setMode('text');
+    setMessage('（ここにセリフが入ります。あとで追加予定）');
+    lockMenu(false);
+    isResolving = false;
+  }
+
+  async function startActTurn() {
+    if (isResolving || battleOver) return;
+    isResolving = true;
+    lockMenu(true);
+
+    const action = await selectAction();
+    if (action === 'もどる') {
+      setMode('text');
+      setMessage('（ここにセリフが入ります。あとで追加予定）');
+      lockMenu(false);
+      isResolving = false;
+      return;
+    }
+
+    setMode('text');
+    if (action === 'しらべる') {
+      setMessage(
+        'サマノ・スペクトゥスを　しらべた。\n' +
+        'HP ' + Math.max(0, bossHP) + ' / ' + bossHPMax + '\n' +
+        '無数の瞳が、あなたのすべてを値踏みしている。'
+      );
+      await wait(1400);
+    } else if (action === 'なでる') {
+      setMessage('サマノ・スペクトゥスを　なでた。');
+      await wait(1200);
+      setMessage('「撫でンナ！」', 'サマノ・スペクトゥス');
+      await wait(1200);
     }
 
     setMessage('情報の悪魔の攻撃……！');
