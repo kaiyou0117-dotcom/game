@@ -196,6 +196,23 @@
     outline-offset: 3px;
   }
 
+  .victory-title {
+    font-family: 'Shippori Mincho', serif;
+    font-weight: 700;
+    font-size: clamp(24px, 6vw, 36px);
+    color: var(--gold);
+    letter-spacing: 0.1em;
+    animation: gameoverPulse 1.8s ease-in-out infinite;
+  }
+  .retry-btn.victory {
+    border-color: var(--gold);
+  }
+  .retry-btn.victory:hover,
+  .retry-btn.victory:focus-visible {
+    background: var(--gold);
+    color: var(--ink-black);
+  }
+
   /* small in-battle difficulty badge */
   .difficulty-badge {
     position: fixed;
@@ -321,6 +338,9 @@
     padding-bottom: 6px;
     border-bottom: 1px solid var(--parchment-edge);
   }
+  .tb-message {
+    white-space: pre-line;
+  }
   .textbox .placeholder {
     opacity: 0.55;
     font-style: normal;
@@ -367,6 +387,14 @@
     opacity: 0;
     pointer-events: none;
   }
+  .display-slot[data-mode="attack"] .attack-gauge-wrap {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .display-slot[data-mode="attack"] .textbox-wrap {
+    opacity: 0;
+    pointer-events: none;
+  }
 
   .bullet-canvas {
     position: absolute;
@@ -392,6 +420,63 @@
     0% { filter: drop-shadow(0 0 4px rgba(209, 57, 74, 0.8)); }
     20% { filter: drop-shadow(0 0 12px #ffffff) brightness(2.2); }
     100% { filter: drop-shadow(0 0 4px rgba(209, 57, 74, 0.8)); }
+  }
+
+  .attack-gauge-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 0 18px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    cursor: pointer;
+  }
+  .attack-gauge-track {
+    position: relative;
+    width: 100%;
+    height: 30px;
+    background: linear-gradient(90deg,
+      #2a2333 0%,
+      #6a4fbf 30%,
+      var(--gold) 50%,
+      #6a4fbf 70%,
+      #2a2333 100%);
+    border: 3px solid var(--gold);
+  }
+  .attack-gauge-sweet {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    left: calc(50% - 10px);
+    width: 20px;
+    border-left: 2px dashed rgba(11, 10, 18, 0.5);
+    border-right: 2px dashed rgba(11, 10, 18, 0.5);
+  }
+  .attack-gauge-marker {
+    position: absolute;
+    top: -6px;
+    bottom: -6px;
+    left: 0%;
+    width: 5px;
+    background: var(--parchment);
+    box-shadow: 0 0 8px 1px rgba(255, 255, 255, 0.8);
+    transform: translateX(-50%);
+  }
+  .attack-gauge-marker.locked {
+    background: var(--blood);
+    box-shadow: 0 0 10px 2px rgba(209, 57, 74, 0.9);
+  }
+  .attack-gauge-hint {
+    font-family: 'DotGothic16', sans-serif;
+    font-size: 12px;
+    color: var(--parchment);
+    opacity: 0.6;
+    letter-spacing: 0.04em;
   }
 
   .command-menu {
@@ -474,6 +559,12 @@
   <button class="retry-btn" id="retryBtn">もう一度挑戦する</button>
 </div>
 
+<div class="opening" id="victoryScreen" data-hidden="true">
+  <div class="victory-title">You Win!</div>
+  <div class="gameover-sub">情報の悪魔を撃破した</div>
+  <button class="retry-btn victory" id="victoryRetryBtn">難易度選択に戻る</button>
+</div>
+
 <div class="difficulty-badge" id="difficultyBadge"></div>
 
 
@@ -505,6 +596,14 @@
     <div class="battle-box" id="battleBox">
       <canvas class="bullet-canvas" id="bulletCanvas"></canvas>
       <div class="soul" id="soul"></div>
+    </div>
+
+    <div class="attack-gauge-wrap" id="attackGaugeWrap">
+      <div class="attack-gauge-track" id="attackGaugeTrack">
+        <div class="attack-gauge-sweet"></div>
+        <div class="attack-gauge-marker" id="attackMarker"></div>
+      </div>
+      <div class="attack-gauge-hint">SPACE または クリックで攻撃！　中央に近いほど高威力</div>
     </div>
 
   </div>
@@ -569,6 +668,17 @@
   const soul = document.getElementById('soul');
   const bulletCanvas = document.getElementById('bulletCanvas');
   const bulletCtx = bulletCanvas.getContext('2d');
+
+  // dragon bullet sprite (uploaded artwork, recolored to a white silhouette with transparency)
+  const dragonSprite = new Image();
+  let dragonSpriteLoaded = false;
+  let dragonSpriteAspect = 0.4; // fallback height/width ratio until it finishes loading
+  dragonSprite.onload = () => {
+    dragonSpriteLoaded = true;
+    dragonSpriteAspect = dragonSprite.naturalHeight / dragonSprite.naturalWidth;
+  };
+  dragonSprite.src = 'images/dragon.png';
+
   const SOUL_SIZE = 16;
   const SPEED = 180; // px/sec
   let pos = { x: 0, y: 0 };
@@ -595,6 +705,7 @@
   // ---- 式神弾幕（Shikigami bullet pattern） ----
   let bullets = [];
   let patternActive = false;
+  let currentPatternType = 'fox'; // alternates each enemy turn: 'fox' or 'dragon'
   let spawnAccumulator = 0;
   let currentSpawnInterval = 400; // ms, adjusted by difficulty
   let invincible = false;
@@ -609,43 +720,165 @@
     const r = 9 + Math.random() * 4;
     const y = r + Math.random() * (bulletCanvas.height - r * 2);
     const speed = (70 + Math.random() * 40) * Math.min(density, 2.8);
-    bullets.push({ x: bulletCanvas.width + r, y, vx: -speed, r });
+    bullets.push({ type: 'fox', x: bulletCanvas.width + r, y, vx: -speed, vy: 0, r });
+  }
+
+  function spawnDragonBullet() {
+    const density = bulletDensity();
+    const w = bulletCanvas.width;
+    const h = bulletCanvas.height;
+    const s = 16 + Math.random() * 8; // half-length scale of the dragon silhouette
+    const r = s * 0.6; // hitbox, smaller than the visual body for fairness
+    const speed = (75 + Math.random() * 35) * Math.min(density, 2.5);
+    const margin = s * 2.2;
+    const side = Math.floor(Math.random() * 4); // 0 top, 1 bottom, 2 left, 3 right
+    let x, y, vx, vy;
+    if (side === 0) {
+      x = Math.random() * w; y = -margin;
+      vx = (Math.random() - 0.5) * speed * 0.5; vy = speed;
+    } else if (side === 1) {
+      x = Math.random() * w; y = h + margin;
+      vx = (Math.random() - 0.5) * speed * 0.5; vy = -speed;
+    } else if (side === 2) {
+      x = -margin; y = Math.random() * h;
+      vx = speed; vy = (Math.random() - 0.5) * speed * 0.5;
+    } else {
+      x = w + margin; y = Math.random() * h;
+      vx = -speed; vy = (Math.random() - 0.5) * speed * 0.5;
+    }
+    const angle = Math.atan2(vy, vx);
+    bullets.push({ type: 'dragon', x, y, vx, vy, r, visualR: s, angle });
+  }
+
+  function spawnPatternBullet() {
+    if (currentPatternType === 'dragon') spawnDragonBullet();
+    else spawnShikigamiBullet();
   }
 
   function updateBullets(dt) {
-    for (const b of bullets) b.x += b.vx * dt;
-    bullets = bullets.filter((b) => b.x + b.r > -20);
+    for (const b of bullets) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+    }
+    bullets = bullets.filter((b) => {
+      const m = (b.visualR || b.r) * 2 + 30;
+      return b.x > -m && b.x < bulletCanvas.width + m && b.y > -m && b.y < bulletCanvas.height + m;
+    });
+  }
+
+  function drawFoxBullet(b) {
+    bulletCtx.beginPath();
+    bulletCtx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    bulletCtx.strokeStyle = 'rgba(180, 200, 255, 0.6)';
+    bulletCtx.lineWidth = 1.5;
+    bulletCtx.shadowColor = 'rgba(255, 255, 255, 0.6)';
+    bulletCtx.shadowBlur = 6;
+    bulletCtx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    bulletCtx.fill();
+    bulletCtx.stroke();
+    // fox-like ears to suggest a shikigami silhouette
+    bulletCtx.beginPath();
+    bulletCtx.moveTo(b.x - b.r * 0.5, b.y - b.r * 0.8);
+    bulletCtx.lineTo(b.x - b.r * 0.9, b.y - b.r * 1.6);
+    bulletCtx.lineTo(b.x - b.r * 0.1, b.y - b.r * 1.1);
+    bulletCtx.closePath();
+    bulletCtx.fill();
+    bulletCtx.stroke();
+    bulletCtx.beginPath();
+    bulletCtx.moveTo(b.x + b.r * 0.5, b.y - b.r * 0.8);
+    bulletCtx.lineTo(b.x + b.r * 0.9, b.y - b.r * 1.6);
+    bulletCtx.lineTo(b.x + b.r * 0.1, b.y - b.r * 1.1);
+    bulletCtx.closePath();
+    bulletCtx.fill();
+    bulletCtx.stroke();
+    bulletCtx.shadowBlur = 0;
+  }
+
+  function drawDragonBulletVector(b) {
+    const s = b.visualR;
+    bulletCtx.save();
+    bulletCtx.translate(b.x, b.y);
+    bulletCtx.rotate(b.angle);
+    bulletCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    bulletCtx.strokeStyle = 'rgba(15, 12, 10, 0.9)';
+    bulletCtx.lineWidth = 1.4;
+    bulletCtx.shadowColor = 'rgba(255, 190, 110, 0.65)';
+    bulletCtx.shadowBlur = 8;
+
+    // body + serpentine mane + head silhouette (local +x = facing/travel direction)
+    bulletCtx.beginPath();
+    bulletCtx.moveTo(-s * 1.85, s * 0.05); // tail tip
+    bulletCtx.quadraticCurveTo(-s * 1.55, -s * 0.35, -s * 1.15, -s * 0.08); // tail curling up
+    bulletCtx.lineTo(-s * 1.35, -s * 0.5); // fin spike 1 (tail)
+    bulletCtx.lineTo(-s * 0.98, -s * 0.22);
+    bulletCtx.lineTo(-s * 1.08, -s * 0.72); // fin spike 2
+    bulletCtx.lineTo(-s * 0.68, -s * 0.35);
+    bulletCtx.lineTo(-s * 0.72, -s * 0.9); // fin spike 3 (mane peak)
+    bulletCtx.lineTo(-s * 0.32, -s * 0.45);
+    bulletCtx.lineTo(-s * 0.3, -s * 0.92); // fin spike 4
+    bulletCtx.lineTo(s * 0.05, -s * 0.5);
+    bulletCtx.lineTo(s * 0.0, -s * 0.85); // fin spike 5 (near head)
+    bulletCtx.lineTo(s * 0.3, -s * 0.42);
+    bulletCtx.lineTo(s * 0.42, -s * 0.58); // brow horn
+    bulletCtx.lineTo(s * 0.56, -s * 0.34);
+    bulletCtx.quadraticCurveTo(s * 0.92, -s * 0.32, s * 1.4, -s * 0.06); // snout top curve
+    bulletCtx.lineTo(s * 1.62, s * 0.05); // nose tip
+    bulletCtx.lineTo(s * 1.3, s * 0.15); // upper jaw underside
+    bulletCtx.lineTo(s * 1.08, s * 0.05); // teeth zigzag (lower jaw)
+    bulletCtx.lineTo(s * 0.97, s * 0.24);
+    bulletCtx.lineTo(s * 0.79, s * 0.09);
+    bulletCtx.lineTo(s * 0.71, s * 0.27);
+    bulletCtx.lineTo(s * 0.52, s * 0.11);
+    bulletCtx.lineTo(s * 0.45, s * 0.29); // chin
+    bulletCtx.quadraticCurveTo(s * 0.1, s * 0.37, -s * 0.3, s * 0.3); // throat/belly curve
+    bulletCtx.quadraticCurveTo(-s * 0.72, s * 0.24, -s * 1.12, s * 0.36);
+    bulletCtx.lineTo(-s * 1.55, s * 0.24);
+    bulletCtx.closePath();
+    bulletCtx.fill();
+    bulletCtx.stroke();
+    bulletCtx.shadowBlur = 0;
+
+    // brow line above the eye
+    bulletCtx.beginPath();
+    bulletCtx.strokeStyle = 'rgba(15, 12, 10, 0.9)';
+    bulletCtx.lineWidth = 1.6;
+    bulletCtx.moveTo(s * 0.42, -s * 0.28);
+    bulletCtx.lineTo(s * 0.68, -s * 0.2);
+    bulletCtx.stroke();
+
+    // eye
+    bulletCtx.beginPath();
+    bulletCtx.fillStyle = 'rgba(15, 12, 10, 0.9)';
+    bulletCtx.arc(s * 0.68, -s * 0.13, s * 0.09, 0, Math.PI * 2);
+    bulletCtx.fill();
+
+    bulletCtx.restore();
+  }
+
+  function drawDragonBullet(b) {
+    if (!dragonSpriteLoaded) {
+      drawDragonBulletVector(b);
+      return;
+    }
+    const s = b.visualR;
+    const drawW = s * 3.6;
+    const drawH = drawW * dragonSpriteAspect;
+    bulletCtx.save();
+    bulletCtx.translate(b.x, b.y);
+    bulletCtx.rotate(b.angle);
+    bulletCtx.scale(-1, 1); // source art faces left; flip so the head leads the travel direction
+    bulletCtx.shadowColor = 'rgba(255, 190, 110, 0.65)';
+    bulletCtx.shadowBlur = 8;
+    bulletCtx.drawImage(dragonSprite, -drawW / 2, -drawH / 2, drawW, drawH);
+    bulletCtx.shadowBlur = 0;
+    bulletCtx.restore();
   }
 
   function drawBullets() {
     bulletCtx.clearRect(0, 0, bulletCanvas.width, bulletCanvas.height);
     for (const b of bullets) {
-      // body
-      bulletCtx.beginPath();
-      bulletCtx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-      bulletCtx.strokeStyle = 'rgba(180, 200, 255, 0.6)';
-      bulletCtx.lineWidth = 1.5;
-      bulletCtx.shadowColor = 'rgba(255, 255, 255, 0.6)';
-      bulletCtx.shadowBlur = 6;
-      bulletCtx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      bulletCtx.fill();
-      bulletCtx.stroke();
-      // fox-like ears to suggest a shikigami silhouette
-      bulletCtx.beginPath();
-      bulletCtx.moveTo(b.x - b.r * 0.5, b.y - b.r * 0.8);
-      bulletCtx.lineTo(b.x - b.r * 0.9, b.y - b.r * 1.6);
-      bulletCtx.lineTo(b.x - b.r * 0.1, b.y - b.r * 1.1);
-      bulletCtx.closePath();
-      bulletCtx.fill();
-      bulletCtx.stroke();
-      bulletCtx.beginPath();
-      bulletCtx.moveTo(b.x + b.r * 0.5, b.y - b.r * 0.8);
-      bulletCtx.lineTo(b.x + b.r * 0.9, b.y - b.r * 1.6);
-      bulletCtx.lineTo(b.x + b.r * 0.1, b.y - b.r * 1.1);
-      bulletCtx.closePath();
-      bulletCtx.fill();
-      bulletCtx.stroke();
-      bulletCtx.shadowBlur = 0;
+      if (b.type === 'dragon') drawDragonBullet(b);
+      else drawFoxBullet(b);
     }
   }
 
@@ -674,12 +907,15 @@
 
   function runShikigamiPattern(durationMs) {
     return new Promise((resolve) => {
+      currentPatternType = currentPatternType === 'fox' ? 'dragon' : 'fox';
       bullets = [];
       spawnAccumulator = 0;
       currentSpawnInterval = Math.max(90, 380 / bulletDensity());
       patternActive = true;
       setTimeout(() => {
-        patternActive = false; // stop spawning; existing bullets keep flying off-screen
+        patternActive = false;
+        bullets = [];
+        bulletCtx.clearRect(0, 0, bulletCanvas.width, bulletCanvas.height);
         resolve();
       }, durationMs);
     });
@@ -708,7 +944,7 @@
       spawnAccumulator += dt * 1000;
       if (spawnAccumulator >= currentSpawnInterval) {
         spawnAccumulator = 0;
-        spawnShikigamiBullet();
+        spawnPatternBullet();
       }
     }
     if (bullets.length > 0 || patternActive) {
@@ -763,7 +999,7 @@
   const commandMenu = document.getElementById('commandMenu');
   const tbMessage = document.getElementById('tbMessage');
   let isResolving = false;
-  let gameOver = false;
+  let battleOver = false;
 
   function setMessage(text) {
     tbMessage.textContent = text;
@@ -777,14 +1013,49 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // SPACE is the universal decision/confirm button throughout the battle.
+  function waitForDecision() {
+    return new Promise((resolve) => {
+      function onSpace(e) {
+        if (e.key !== ' ' && e.code !== 'Space') return;
+        e.preventDefault();
+        window.removeEventListener('keydown', onSpace);
+        resolve();
+      }
+      window.addEventListener('keydown', onSpace);
+    });
+  }
+
+  const TARGETS = ['サマノ・スペクトゥス'];
+
+  async function selectTarget() {
+    setMode('text');
+    setMessage('だれを　ねらう？\n▶ ' + TARGETS[0]);
+    await waitForDecision();
+  }
+
   async function startFightTurn() {
-    if (isResolving || gameOver) return;
+    if (isResolving || battleOver) return;
     isResolving = true;
     lockMenu(true);
 
+    await selectTarget();
+
     setMode('text');
     setMessage('あなたの攻撃！');
-    await wait(1000);
+    await wait(600);
+
+    const dmg = await runAttackGauge();
+    damageBoss(dmg);
+
+    setMode('text');
+    setMessage(dmg + ' のダメージ！');
+    await wait(900);
+
+    if (bossHP <= 0) {
+      showVictory();
+      return;
+    }
 
     setMessage('情報の悪魔の攻撃……！');
     await wait(900);
@@ -848,31 +1119,131 @@
     currentDifficulty = key;
     const cfg = DIFFICULTY[key];
     difficultyBadge.textContent = '難易度：' + cfg.label;
-    // preview HP scaling (real bullet-density hookup comes with actual patterns later)
-    if (hpNumbers) hpNumbers.textContent = cfg.hpMax + ' / ' + cfg.hpMax;
-    if (hpFill) hpFill.style.width = '100%';
+    bossHPMax = cfg.hpMax;
+    bossHP = cfg.hpMax;
+    updateBossHPUI();
     resetPlayerHP();
+  }
+
+  // ---- Boss HP ----
+  let bossHPMax = 0;
+  let bossHP = 0;
+
+  function updateBossHPUI() {
+    const ratio = bossHPMax > 0 ? Math.max(0, bossHP / bossHPMax) : 0;
+    if (hpFill) hpFill.style.width = (ratio * 100) + '%';
+    if (hpNumbers) hpNumbers.textContent = Math.max(0, bossHP) + ' / ' + bossHPMax;
+  }
+
+  function damageBoss(dmg) {
+    bossHP = Math.max(0, bossHP - dmg);
+    updateBossHPUI();
+  }
+
+  // ---- Attack gauge (player's FIGHT input) ----
+  const attackGaugeTrack = document.getElementById('attackGaugeTrack');
+  const attackMarker = document.getElementById('attackMarker');
+  let attackAnimId = null;
+  let attackActive = false;
+  let attackPos = 0;
+  let attackDir = 1;
+
+  function attackSpeedForDifficulty() {
+    const cfg = DIFFICULTY[currentDifficulty];
+    const density = cfg ? cfg.bulletDensity : 1.0;
+    return 95 + density * 45; // %-of-track per second; harder difficulty = faster marker
+  }
+
+  function startAttackAnim() {
+    attackActive = true;
+    attackPos = 0;
+    attackDir = 1;
+    const speed = attackSpeedForDifficulty();
+    let last = null;
+    function frame(now) {
+      if (!attackActive) return;
+      if (last == null) last = now;
+      const dt = (now - last) / 1000;
+      last = now;
+      attackPos += attackDir * speed * dt;
+      if (attackPos >= 100) { attackPos = 100; attackDir = -1; }
+      if (attackPos <= 0) { attackPos = 0; attackDir = 1; }
+      if (attackMarker) attackMarker.style.left = attackPos + '%';
+      attackAnimId = requestAnimationFrame(frame);
+    }
+    attackAnimId = requestAnimationFrame(frame);
+  }
+
+  function stopAttackAnim() {
+    attackActive = false;
+    if (attackAnimId) cancelAnimationFrame(attackAnimId);
+    attackAnimId = null;
+  }
+
+  function computeAttackDamage(posPercent) {
+    const dist = Math.abs(posPercent - 50); // 0 (center) .. 50 (edge)
+    const power = Math.max(0, 1 - dist / 50); // 1 at center, 0 at edges
+    const MIN_DMG = 2;
+    const MAX_DMG = 16;
+    return Math.round(MIN_DMG + power * (MAX_DMG - MIN_DMG));
+  }
+
+  function runAttackGauge() {
+    setMode('attack');
+    startAttackAnim();
+    return new Promise((resolve) => {
+      function onInput(e) {
+        if (e.type === 'keydown') {
+          if (e.key !== ' ' && e.code !== 'Space') return;
+          e.preventDefault();
+        }
+        cleanup();
+        stopAttackAnim();
+        if (attackMarker) attackMarker.classList.add('locked');
+        const dmg = computeAttackDamage(attackPos);
+        setTimeout(() => {
+          if (attackMarker) attackMarker.classList.remove('locked');
+          resolve(dmg);
+        }, 300);
+      }
+      function cleanup() {
+        window.removeEventListener('keydown', onInput);
+        attackGaugeTrack.removeEventListener('click', onInput);
+      }
+      window.addEventListener('keydown', onInput);
+      attackGaugeTrack.addEventListener('click', onInput);
+    });
   }
 
   // ---- Game over / retry ----
   const gameOverScreen = document.getElementById('gameOverScreen');
   const retryBtn = document.getElementById('retryBtn');
+  const victoryScreen = document.getElementById('victoryScreen');
+  const victoryRetryBtn = document.getElementById('victoryRetryBtn');
 
   function showGameOver() {
-    gameOver = true;
+    battleOver = true;
     patternActive = false;
     lockMenu(true);
     gameOverScreen.setAttribute('data-hidden', 'false');
   }
 
+  function showVictory() {
+    battleOver = true;
+    patternActive = false;
+    lockMenu(true);
+    victoryScreen.setAttribute('data-hidden', 'false');
+  }
+
   function resetToOpening() {
     gameOverScreen.setAttribute('data-hidden', 'true');
+    victoryScreen.setAttribute('data-hidden', 'true');
     battleStage.setAttribute('data-locked', 'true');
     openingScreen.setAttribute('data-hidden', 'false');
 
     bullets = [];
     patternActive = false;
-    gameOver = false;
+    battleOver = false;
     isResolving = false;
     lockMenu(false);
     setMode('text');
@@ -880,6 +1251,7 @@
   }
 
   retryBtn.addEventListener('click', resetToOpening);
+  victoryRetryBtn.addEventListener('click', resetToOpening);
 
   document.querySelectorAll('.diff-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -887,6 +1259,26 @@
       openingScreen.setAttribute('data-hidden', 'true');
       battleStage.setAttribute('data-locked', 'false');
     });
+  });
+
+  // SPACE also confirms the selected command-menu button, and dismisses
+  // the game-over / victory overlays — the same "decision" key everywhere.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== ' ' && e.code !== 'Space') return;
+    if (gameOverScreen.getAttribute('data-hidden') === 'false') {
+      e.preventDefault();
+      resetToOpening();
+      return;
+    }
+    if (victoryScreen.getAttribute('data-hidden') === 'false') {
+      e.preventDefault();
+      resetToOpening();
+      return;
+    }
+    if (battleStage.getAttribute('data-locked') === 'true') return;
+    if (commandMenu.getAttribute('data-locked') === 'true') return;
+    e.preventDefault();
+    buttons[selectedIndex].click();
   });
 </script>
 
